@@ -1,7 +1,7 @@
 // Payment Track 2.0 — Google Auth + Sheets API
 
 const CLIENT_ID = '275121431565-8ss1bt9tdc4043ggf653r49dlsutcets.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
+const SCOPES = 'openid https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
 const SHEET_NAME_PREFIX = 'payment-track-2';
 
 const TABS = {
@@ -36,16 +36,21 @@ function clearSession() {
 }
 
 // ── GIS init ──────────────────────────────────────────────────────────────
+let _cachedUser = null;
+
 function initTokenClient(onSuccess, onError) {
   _tokenClient = window.google.accounts.oauth2.initTokenClient({
     client_id: CLIENT_ID,
     scope: SCOPES,
     callback: async (resp) => {
       if (resp.error) { onError(resp.error); return; }
-      // Set token FIRST before any API calls
       _accessToken = resp.access_token;
       try {
-        const user = await fetchUserInfo(_accessToken);
+        let user = _cachedUser;
+        if (!user) {
+          user = await fetchUserInfo(_accessToken);
+        }
+        _cachedUser = null;
         onSuccess({ token: _accessToken, user });
       } catch(e) {
         console.error('fetchUserInfo failed:', e);
@@ -272,5 +277,6 @@ Object.assign(window, {
     clearSession,
     setToken: (t) => { _accessToken = t; },
     getToken: () => _accessToken,
+    setCachedUser: (u) => { _cachedUser = u; },
   }
 });

@@ -135,7 +135,8 @@ function App() {
       // (GIS tokens expire after 1hr and cannot be reused across page loads)
       setUser(session.user);
       setAuthState('loading');
-      GAPI.requestToken(); // will fire callback above with fresh token
+      GAPI.setCachedUser(session.user);
+      GAPI.requestToken();
     } else {
       setAuthState('idle');
     }
