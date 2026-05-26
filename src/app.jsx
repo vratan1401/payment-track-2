@@ -118,7 +118,9 @@ function App() {
       async ({ token, user: u }) => {
         GAPI.setToken(token);
         setUser(u);
-        await loadAppData(token, u);
+        // Pass existing sheetId from session if available to avoid re-searching Drive
+        const session = GAPI.loadSession();
+        await loadAppData(token, u, session.sheetId || null);
       },
       (err) => {
         setAuthError(err);
@@ -126,18 +128,14 @@ function App() {
       }
     );
 
-    // Check for existing session
+    // Check for existing session — if user/sheet known, show loading and request fresh token silently
     const session = GAPI.loadSession();
-    if (session.token && session.sheetId && session.user) {
-      GAPI.setToken(session.token);
+    if (session.sheetId && session.user) {
+      // We have a known user — show loading and silently request a fresh token
+      // (GIS tokens expire after 1hr and cannot be reused across page loads)
       setUser(session.user);
       setAuthState('loading');
-      try {
-        await loadAppData(session.token, session.user, session.sheetId);
-      } catch(e) {
-        // Token likely expired — prompt re-auth silently
-        GAPI.requestToken();
-      }
+      GAPI.requestToken(); // will fire callback above with fresh token
     } else {
       setAuthState('idle');
     }

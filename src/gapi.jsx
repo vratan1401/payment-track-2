@@ -1,11 +1,9 @@
 // Payment Track 2.0 — Google Auth + Sheets API
-// OAuth via Google Identity Services (GIS), Sheets API v4 direct from frontend.
 
 const CLIENT_ID = '275121431565-8ss1bt9tdc4043ggf653r49dlsutcets.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
 const SHEET_NAME_PREFIX = 'payment-track-2';
 
-// Sheet tab names
 const TABS = {
   EXPENSES: 'expenses',
   BUDGETS: 'budgets',
@@ -16,8 +14,6 @@ const TABS = {
 // ── Token management ──────────────────────────────────────────────────────
 let _accessToken = null;
 let _tokenClient = null;
-
-function getToken() { return _accessToken; }
 
 function saveSession(token, sheetId, user) {
   localStorage.setItem('pt2_token', token);
@@ -46,22 +42,51 @@ function initTokenClient(onSuccess, onError) {
     scope: SCOPES,
     callback: async (resp) => {
       if (resp.error) { onError(resp.error); return; }
+      // Set token FIRST before any API calls
       _accessToken = resp.access_token;
       try {
-        const user = await fetchUserInfo();
-        onSuccess({ token: resp.access_token, user });
-      } catch(e) { onError(e.message); }
+        const user = await fetchUserInfo(_accessToken);
+        onSuccess({ token: _accessToken, user });
+      } catch(e) {
+        console.error('fetchUserInfo failed:', e);
+        onError(e.message);
+      }
     },
   });
 }
 
 function requestToken() {
   if (!_tokenClient) throw new Error('Token client not initialised');
-  _tokenClient.requestAccessToken({ prompt: '' });
+  _tokenClient.requestAccessToken({ prompt: 'consent' });
 }
 
-async function fetchUserInfo() {
-  const r = await apiFetch('https://www.googleapis.com/oauth2/v3/userinfo');
+// ── Generic fetch wrapper ─────────────────────────────────────────────────
+async function apiFetch(url, opts = {}, tokenOverride) {
+  const token = tokenOverride || _accessToken;
+  if (!token) throw new Error('No access token available');
+
+  const fetchOpts = {
+    method: opts.method || 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  };
+
+  if (opts.body !== undefined) {
+    fetchOpts.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+  }
+
+  const res = await fetch(url, fetchOpts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function fetchUserInfo(token) {
+  const r = await apiFetch('https://www.googleapis.com/oauth2/v3/userinfo', {}, token);
   return {
     name: r.name,
     email: r.email,
@@ -70,28 +95,8 @@ async function fetchUserInfo() {
   };
 }
 
-// ── Generic fetch wrapper ─────────────────────────────────────────────────
-async function apiFetch(url, opts = {}) {
-  const token = _accessToken || loadSession().token;
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(opts.headers || {}),
-    },
-    body: opts.body ? (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)) : undefined,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
 // ── Google Drive — find or create sheet ──────────────────────────────────
 async function findOrCreateSheet() {
-  // Search Drive for existing sheet
   const q = encodeURIComponent(`name contains '${SHEET_NAME_PREFIX}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`);
   const list = await apiFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=5`);
   if (list.files && list.files.length > 0) {
@@ -110,12 +115,8 @@ async function createSheet() {
       { properties: { title: TABS.META,     index: 3 } },
     ],
   };
-  const res = await apiFetch('https://sheets.googleapis.com/v4/spreadsheets', {
-    method: 'POST',
-    body,
-  });
+  const res = await apiFetch('https://sheets.googleapis.com/v4/spreadsheets', { method: 'POST', body });
   const sheetId = res.spreadsheetId;
-  // Write headers
   await writeHeaders(sheetId);
   return sheetId;
 }
@@ -133,33 +134,31 @@ async function writeHeaders(sheetId) {
   });
 }
 
-// ── Read all app data from sheet ──────────────────────────────────────────
+// ── Read all app data ─────────────────────────────────────────────────────
 async function loadSheetData(sheetId) {
   const ranges = [
     `${TABS.EXPENSES}!A2:J`,
     `${TABS.BUDGETS}!A2:C`,
     `${TABS.MODES}!A2:H`,
   ];
-  const res = await apiFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchGet?ranges=${ranges.map(encodeURIComponent).join('&ranges=')}`
-  );
+  const encoded = ranges.map(r => `ranges=${encodeURIComponent(r)}`).join('&');
+  const res = await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchGet?${encoded}`);
   const [expRows, budRows, modeRows] = res.valueRanges.map(r => r.values || []);
 
   const expenses = expRows
     .filter(r => r[0])
     .map(r => ({
-      id:      r[0] || '',
-      date:    r[1] || '',
-      amount:  Number(r[2]) || 0,
-      payee:   r[3] || '',
-      cat:     r[4] || 'food',
-      sub:     r[5] || '',
-      modeId:  r[6] || null,
-      note:    r[7] || '',
+      id:     r[0] || '',
+      date:   r[1] || '',
+      amount: Number(r[2]) || 0,
+      payee:  r[3] || '',
+      cat:    r[4] || 'food',
+      sub:    r[5] || '',
+      modeId: r[6] || null,
+      note:   r[7] || '',
     }))
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  // Budgets: key-value rows
   const budgetMap = Object.fromEntries(budRows.filter(r => r[0]).map(r => [r[0], Number(r[1]) || 0]));
   const budgets = {
     total:     budgetMap['total']     || 108000,
@@ -190,22 +189,24 @@ async function appendExpense(sheetId, exp) {
     exp.cat, exp.sub, exp.modeId || '', exp.note || '',
     new Date().toISOString(), 'true',
   ];
-  await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.EXPENSES}!A:J:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
-    method: 'POST',
-    body: { values: [row] },
-  });
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.EXPENSES}!A:J:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    { method: 'POST', body: { values: [row] } }
+  );
 }
 
 // ── Write budgets ─────────────────────────────────────────────────────────
 async function saveBudgets(sheetId, budgets) {
   const now = new Date().toISOString();
   const rows = Object.entries(budgets).map(([k, v]) => [k, v, now]);
-  // Clear and rewrite
-  await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.BUDGETS}!A2:C:clear`, { method: 'POST', body: {} });
-  await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.BUDGETS}!A2:C?valueInputOption=RAW`, {
-    method: 'PUT',
-    body: { values: rows },
-  });
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.BUDGETS}!A2:C:clear`,
+    { method: 'POST', body: {} }
+  );
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.BUDGETS}!A2:C?valueInputOption=RAW`,
+    { method: 'PUT', body: { values: rows } }
+  );
 }
 
 // ── Write mode ────────────────────────────────────────────────────────────
@@ -215,23 +216,22 @@ async function appendMode(sheetId, mode) {
     mode.start, mode.end, mode.budget,
     mode.note || '', new Date().toISOString(),
   ];
-  await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.MODES}!A:H:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
-    method: 'POST',
-    body: { values: [row] },
-  });
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.MODES}!A:H:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    { method: 'POST', body: { values: [row] } }
+  );
 }
 
 async function updateModeStatus(sheetId, modeId, status) {
-  // Find row index by reading all modes
   const res = await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.MODES}!A2:A`);
   const rows = res.values || [];
   const idx = rows.findIndex(r => r[0] === modeId);
   if (idx === -1) return;
-  const rowNum = idx + 2; // 1-indexed + header
-  await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.MODES}!C${rowNum}?valueInputOption=RAW`, {
-    method: 'PUT',
-    body: { values: [[status]] },
-  });
+  const rowNum = idx + 2;
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${TABS.MODES}!C${rowNum}?valueInputOption=RAW`,
+    { method: 'PUT', body: { values: [[status]] } }
+  );
 }
 
 // ── Delete expense ────────────────────────────────────────────────────────
@@ -240,11 +240,10 @@ async function deleteExpense(sheetId, expId) {
   const rows = res.values || [];
   const idx = rows.findIndex(r => r[0] === expId);
   if (idx === -1) return;
-  // Get spreadsheet to find sheet ID for batchUpdate
   const meta = await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties`);
   const expSheet = meta.sheets.find(s => s.properties.title === TABS.EXPENSES);
   const sheetGid = expSheet.properties.sheetId;
-  const rowNum = idx + 1; // 0-indexed, +1 for header
+  const rowNum = idx + 1;
   await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`, {
     method: 'POST',
     body: {
@@ -272,6 +271,6 @@ Object.assign(window, {
     saveSession,
     clearSession,
     setToken: (t) => { _accessToken = t; },
-    getToken,
+    getToken: () => _accessToken,
   }
 });
