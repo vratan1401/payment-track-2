@@ -1,7 +1,7 @@
 // Payment Track 2.0 — Google Auth + Sheets API
 
 const CLIENT_ID = '275121431565-8ss1bt9tdc4043ggf653r49dlsutcets.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
 const SHEET_NAME_PREFIX = 'payment-track-2';
 
 const TABS = {
@@ -55,9 +55,9 @@ function initTokenClient(onSuccess, onError) {
   });
 }
 
-function requestToken() {
+function requestToken(forceConsent) {
   if (!_tokenClient) throw new Error('Token client not initialised');
-  _tokenClient.requestAccessToken({ prompt: 'consent' });
+  _tokenClient.requestAccessToken(forceConsent ? { prompt: 'consent' } : {});
 }
 
 // ── Generic fetch wrapper ─────────────────────────────────────────────────

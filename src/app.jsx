@@ -164,7 +164,7 @@ function App() {
   }
 
   function handleSignIn() {
-    GAPI.requestToken();
+    GAPI.requestToken(true);
     setAuthState('loading');
   }
 
