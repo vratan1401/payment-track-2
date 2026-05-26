@@ -35,43 +35,93 @@ function clearSession() {
   localStorage.removeItem('pt2_user');
 }
 
+// ── Debug logger ──────────────────────────────────────────────────────────
+const PT2_LOG = {
+  _grp: (label) => {
+    console.groupCollapsed(`%c[PT2 Auth] ${label}`, 'color:#8b2500;font-weight:bold');
+  },
+  info: (label, data) => {
+    console.log(`%c[PT2] ${label}`, 'color:#6b6b3a;font-weight:bold', data ?? '');
+  },
+  ok: (label, data) => {
+    console.log(`%c[PT2 ✓] ${label}`, 'color:#2a6b2a;font-weight:bold', data ?? '');
+  },
+  warn: (label, data) => {
+    console.warn(`%c[PT2 ⚠] ${label}`, 'color:#b85c00;font-weight:bold', data ?? '');
+  },
+  err: (label, err, extra) => {
+    console.group(`%c[PT2 ✗] ${label}`, 'color:#c00;font-weight:bold');
+    if (err instanceof Error) {
+      console.error('message:', err.message);
+      console.error('stack:', err.stack);
+    } else {
+      console.error('error:', err);
+    }
+    if (extra !== undefined) console.error('context:', extra);
+    console.groupEnd();
+  },
+};
+
 // ── GIS init ──────────────────────────────────────────────────────────────
 let _cachedUser = null;
 
 function initTokenClient(onSuccess, onError) {
+  PT2_LOG.info('initTokenClient', { clientId: CLIENT_ID, origin: location.origin });
   _tokenClient = window.google.accounts.oauth2.initTokenClient({
     client_id: CLIENT_ID,
     scope: SCOPES,
     callback: async (resp) => {
-      if (resp.error) { onError(resp.error); return; }
+      PT2_LOG.info('GIS token callback fired', {
+        hasToken: !!resp.access_token,
+        error: resp.error,
+        errorDesc: resp.error_description,
+        errorUri: resp.error_uri,
+        scope: resp.scope,
+      });
+      if (resp.error) {
+        PT2_LOG.err('GIS returned error', resp.error, { description: resp.error_description });
+        onError(resp.error + (resp.error_description ? ` — ${resp.error_description}` : ''));
+        return;
+      }
       _accessToken = resp.access_token;
+      PT2_LOG.ok('Access token received', { tokenPreview: resp.access_token?.slice(0, 12) + '…' });
       try {
         let user = _cachedUser;
         if (!user) {
+          PT2_LOG.info('Fetching userinfo…');
           user = await fetchUserInfo(_accessToken);
+          PT2_LOG.ok('userinfo fetched', { email: user.email, name: user.name });
+        } else {
+          PT2_LOG.info('Using cached user', { email: user.email });
         }
         _cachedUser = null;
         onSuccess({ token: _accessToken, user });
       } catch(e) {
-        console.error('fetchUserInfo failed:', e);
+        PT2_LOG.err('fetchUserInfo failed', e);
         onError(e.message);
       }
     },
   });
+  PT2_LOG.ok('Token client initialised');
 }
 
 function requestToken(forceConsent) {
   if (!_tokenClient) throw new Error('Token client not initialised');
+  PT2_LOG.info('requestToken', { forceConsent: !!forceConsent, origin: location.origin });
   _tokenClient.requestAccessToken(forceConsent ? { prompt: 'consent' } : {});
 }
 
 // ── Generic fetch wrapper ─────────────────────────────────────────────────
 async function apiFetch(url, opts = {}, tokenOverride) {
   const token = tokenOverride || _accessToken;
-  if (!token) throw new Error('No access token available');
+  if (!token) {
+    PT2_LOG.err('apiFetch called with no token', null, { url });
+    throw new Error('No access token available');
+  }
 
+  const method = opts.method || 'GET';
   const fetchOpts = {
-    method: opts.method || 'GET',
+    method,
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -82,10 +132,16 @@ async function apiFetch(url, opts = {}, tokenOverride) {
     fetchOpts.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
   }
 
+  PT2_LOG.info(`${method} ${url.replace('https://www.googleapis.com','').replace('https://sheets.googleapis.com','').replace('https://www.googleapis.com/drive/v3','')}`);
   const res = await fetch(url, fetchOpts);
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `HTTP ${res.status}`);
+    const errBody = await res.json().catch(() => ({}));
+    PT2_LOG.err(`HTTP ${res.status} on ${method} ${url}`, errBody?.error?.message || `HTTP ${res.status}`, {
+      status: res.status,
+      statusText: res.statusText,
+      errorBody: errBody,
+    });
+    throw new Error(errBody?.error?.message || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -166,10 +222,10 @@ async function loadSheetData(sheetId) {
 
   const budgetMap = Object.fromEntries(budRows.filter(r => r[0]).map(r => [r[0], Number(r[1]) || 0]));
   const budgets = {
-    total:     budgetMap['total']     || 108000,
-    needs:     budgetMap['needs']     || 54000,
-    lifestyle: budgetMap['lifestyle'] || 32400,
-    savings:   budgetMap['savings']   || 21600,
+    total:     budgetMap['total']     || 0,
+    needs:     budgetMap['needs']     || 0,
+    lifestyle: budgetMap['lifestyle'] || 0,
+    savings:   budgetMap['savings']   || 0,
   };
 
   const modes = modeRows

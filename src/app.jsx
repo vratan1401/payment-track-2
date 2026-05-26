@@ -102,63 +102,79 @@ function App() {
 
   // ── Bootstrap ─────────────────────────────────────────────────────────
   React.useEffect(() => {
-    // Wait for GIS to load, then check session
+    console.log('%c[PT2] App mounted — waiting for GIS script…', 'color:#6b6b3a;font-weight:bold', { origin: location.origin, href: location.href });
+    let waited = 0;
     const interval = setInterval(() => {
+      waited += 100;
       if (window.google?.accounts?.oauth2) {
         clearInterval(interval);
+        console.log(`%c[PT2 ✓] GIS loaded after ${waited}ms`, 'color:#2a6b2a;font-weight:bold');
         bootstrapAuth();
+      } else if (waited >= 10000) {
+        clearInterval(interval);
+        console.error('[PT2 ✗] GIS script never loaded after 10s — check network / CSP / script tag');
       }
     }, 100);
     return () => clearInterval(interval);
   }, []);
 
   async function bootstrapAuth() {
-    // Init token client first
+    console.log('%c[PT2] bootstrapAuth start', 'color:#6b6b3a;font-weight:bold');
     GAPI.initTokenClient(
       async ({ token, user: u }) => {
+        console.log('%c[PT2 ✓] Token client success callback', 'color:#2a6b2a;font-weight:bold', { email: u?.email });
         GAPI.setToken(token);
         setUser(u);
-        // Pass existing sheetId from session if available to avoid re-searching Drive
         const session = GAPI.loadSession();
         await loadAppData(token, u, session.sheetId || null);
       },
       (err) => {
+        console.error('[PT2 ✗] Token client error callback:', err);
         setAuthError(err);
         setAuthState('error');
       }
     );
 
-    // Check for existing session — if user/sheet known, show loading and request fresh token silently
     const session = GAPI.loadSession();
+    console.log('%c[PT2] Session check', 'color:#6b6b3a;font-weight:bold', {
+      hasSheet: !!session.sheetId,
+      hasUser: !!session.user,
+      userEmail: session.user?.email,
+    });
     if (session.sheetId && session.user) {
-      // We have a known user — show loading and silently request a fresh token
-      // (GIS tokens expire after 1hr and cannot be reused across page loads)
       setUser(session.user);
       setAuthState('loading');
       GAPI.setCachedUser(session.user);
+      console.log('%c[PT2] Silent token refresh…', 'color:#6b6b3a;font-weight:bold');
       GAPI.requestToken();
     } else {
+      console.log('%c[PT2] No session — showing login screen', 'color:#6b6b3a;font-weight:bold');
       setAuthState('idle');
     }
   }
 
   async function loadAppData(token, u, existingSheetId) {
+    console.log('%c[PT2] loadAppData start', 'color:#6b6b3a;font-weight:bold', { existingSheetId });
     setAuthState('loading');
     try {
       GAPI.setToken(token);
       const sid = existingSheetId || await GAPI.findOrCreateSheet();
+      console.log('%c[PT2] Sheet resolved', 'color:#6b6b3a;font-weight:bold', { sheetId: sid });
       const data = await GAPI.loadSheetData(sid);
+      console.log('%c[PT2 ✓] Sheet data loaded', 'color:#2a6b2a;font-weight:bold', {
+        expenses: data.expenses.length,
+        modes: data.modes.length,
+      });
       setSheetId(sid);
       setExpenses(data.expenses);
       setBudgetsState(data.budgets);
       setModes(data.modes);
-      // Find active mode (status === 'active')
       const active = data.modes.find(m => m.status === 'active');
       if (active) setActiveModeId(active.id);
       GAPI.saveSession(token, sid, u);
       setAuthState('ready');
     } catch(e) {
-      console.error('loadAppData failed:', e);
+      console.error('[PT2 ✗] loadAppData failed:', e);
       setAuthError(e.message);
       setAuthState('error');
     }

@@ -21,10 +21,10 @@ const BUCKETS = [
 ];
 
 const DEFAULT_BUDGETS = {
-  total:     108000,
-  needs:     54000,
-  lifestyle: 32400,
-  savings:   21600,
+  total:     0,
+  needs:     0,
+  lifestyle: 0,
+  savings:   0,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────
